@@ -165,3 +165,21 @@ parensEval s = case s of
 
 calculate :: String -> Either ParseError Double 
 calculate = parensEval <=< parseExpr
+
+-- test inputs to feed into ghci
+-- :load Main.hs
+-- calculate "3+2^(-1/(551.51-9.42*2)+21)/15"
+-- calculate "-3"
+-- calculate "(7+3)*5+7+3*5-(-3)/6.2^(-1.5/0.3^(-0.5))"
+-- calculate "2^3^2"
+-- calculate "2^(3^(2))"
+-- calculate "2^(-3^(-2))"
+-- calculate "(7+3)*5+7+3*5-(-3)/6.2^(-1.5/0.3^(-0.5))-3"
+-- calculate "-(-7+3)-3*5-7+3*5-(-3)/6.2^(-1.5/0.3^(-0.5))-3"
+-- calculate "-(3-(-5))-3"
+-- calculate ")"
+-- calculate "3b"
+-- calculate "()"
+-- calculate ""
+-- calculate "-"
+-- calculate "2^^2"

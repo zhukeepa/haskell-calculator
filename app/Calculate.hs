@@ -2,6 +2,7 @@ module Calculate where
 
 import Text.Read (readMaybe)
 import Data.List.Split
+import Data.Maybe
 import Control.Monad
 
 -- how this works: 
@@ -16,17 +17,26 @@ data Operation = Plus | Minus | Times | Divide | Exp deriving (Show, Eq)
 data Term = Number Double | Op Operation deriving (Show, Eq) 
 data Expr = NakedExpr [Term] | ParensExpr [Term] Expr Expr deriving (Show, Eq)
 -- everything with matching parentheses can be split into 
---   everything before first parenthesis
+--   everything before first parenthesis (parenthesis-free (i.e. "naked"))
 --   everything non-inclusively between first opening parens and corresponding closing parens
 --   everything after that closing parens
 -- 1+(2+3)+5 would get parsed into ParensExpr [1,+] (NakedExpr [2,+,3]) (NakedExpr [+,5])
 
-lookUp :: Operation -> Double -> Double -> Double
-lookUp Plus = (+)
-lookUp Minus = (-)
-lookUp Times = (*)
-lookUp Divide = (/)
-lookUp Exp = (**)
+evalOp :: Operation -> Double -> Double -> Double
+evalOp Plus = (+)
+evalOp Minus = (-)
+evalOp Times = (*)
+evalOp Divide = (/)
+evalOp Exp = (**)
+
+lookupOp :: Char -> Maybe Operation 
+lookupOp '+' = Just Plus
+lookupOp '-' = Just Minus
+lookupOp '*' = Just Times
+lookupOp '/' = Just Divide
+lookupOp '^' = Just Exp
+lookupOp _   = Nothing
+
 
 data ParseError = ParensMismatch | EmptyInput | InvalidNumber | OperatorError | AssertFalse String deriving (Show, Eq)
 
@@ -34,23 +44,7 @@ data ParseError = ParensMismatch | EmptyInput | InvalidNumber | OperatorError | 
 -------------------------------------------------------------------------------
 
 isOperator :: Char -> Bool 
-isOperator = (flip elem) ['+', '-', '*', '/', '^']
-
--- turns a numerical string into a (Number Double), and an operation into 
--- an Op Operation 
-parseTerm :: String -> Either ParseError Term 
-parseTerm "" = Left $ AssertFalse "parseTerm should never be fed an empty input"
-parseTerm s = case isOperator $ head s of 
-  False -> case readMaybe s of 
-    Just d -> Right $ Number d 
-    Nothing -> Left InvalidNumber
-  True -> case head s of 
-    '+' -> Right (Op Plus)
-    '-' -> Right (Op Minus)
-    '*' -> Right (Op Times)
-    '/' -> Right (Op Divide)
-    '^' -> Right (Op Exp)
-    _ -> Left $ AssertFalse "forbidden case of parseTerm"
+isOperator = isJust . lookupOp
 
 -- examples
 -- 2+3.5-5+ --> ["2", "+", "3.5", "-", "5","+"]
@@ -58,24 +52,7 @@ parseTerm s = case isOperator $ head s of
 splitByOperator :: String -> [String] 
 splitByOperator = filter (not . null) . split (whenElt isOperator)
 
--- like ghci, we don't process negative numbers, unless they are right at
--- the beginning of an expression to compute, e.g. the original string 
--- (e.g. like in "-5+3"), or the contents within parentheses (e.g. like the 
--- "-1-2" in "5*(-1-2)"), as opposed to somewhere in the weeds of an 
--- expression we're parsing (for example, the "-3" in "(1+2)-3"); this is
--- what the first input tracks. since this function is only called in
--- parenthesis-free contexts, we can use a simple hack to replace minus 
--- signs at the start of a string with 0-. Example:
--- -5+3 ==> ["-","5","+","3"] ==> ["0","-","5","+","3"]
-negativeMod :: Bool -> [String] -> [String]
-negativeMod True ("-":s) = "0":"-":s
-negativeMod _ s = s
-
--- turns a parenthesis-free expression into a list of operators and numerical terms. 
-parseNaked :: Bool -> String -> Either ParseError [Term] 
-parseNaked isHead = sequence . (fmap parseTerm) . (negativeMod isHead) . splitByOperator
-
--- ex: "1+(2+5)-10" ==> ("1+", "2+5", "-10")
+-- ex: "1+(2-(3+5))-10" ==> ("1+", "2-(3+5)", "-10")
 parensSplit :: String -> Either ParseError (String, String, String) 
 parensSplit [] = Right ([], [], [])
 parensSplit (')':_) = Left ParensMismatch
@@ -99,11 +76,34 @@ parensSplit (t:ts) = (\(a,b,c) -> (t:a, b, c)) <$!> parensSplit ts
 -- ^ just appends the first char of your string to the leftmost tuple of what 
 -- you get when you recursively call the func on the rest of your string 
 
--- We need to track whether the string we're parsing is a "head" (at the very
--- beginning of an expression we're evaling, or the inside of parentheses) or 
--- a "tail" (content after a closing parentheses) in order to correctly discern 
--- whether a "-" makes a number negative, or whether it's a minus sign after a
--- closing parenthesis. See comment for negativeMod for examples. 
+-- turns a numerical string into a (Number Double), and an operation into 
+-- an Op Operation 
+parseTerm :: String -> Either ParseError Term 
+parseTerm "" = Left $ AssertFalse "parseTerm should never be fed an empty input"
+parseTerm s = case lookupOp $ head s of 
+  Just op -> Right $ Op op 
+  Nothing -> case readMaybe s of 
+    Just d -> Right $ Number d 
+    Nothing -> Left InvalidNumber
+
+-- like ghci, we don't process negative numbers, unless they are right at
+-- the beginning of an expression to compute, e.g. the original expression 
+-- (e.g. like in "-5+3"), or the contents within parentheses (e.g. like the 
+-- "-1-2" in "5*(-1-2)"), as opposed to somewhere in the weeds of an 
+-- expression we're parsing (for example, the "-3" in "(1+2)-3"); this is
+-- what the first input tracks. In the former case, we use a simple hack
+-- to replace minus  signs at the start of a string with 0-. Example:
+-- -5+3 ==> ["-","5","+","3"] ==> ["0","-","5","+","3"]
+-- The first argument tracks whether we're in the former case or the latter case. 
+negativeHack :: Bool -> [String] -> [String]
+negativeHack True ("-":s) = "0":"-":s
+negativeHack _ s = s
+
+-- ex: "5-2*3.5" --> [Number 5, Op Minus, Number 2, Op Times, Number 3.5]
+parseNaked :: Bool -> String -> Either ParseError [Term] 
+parseNaked isHead = sequence . (fmap parseTerm) . (negativeHack isHead) . splitByOperator
+
+-- See comment in negativeHack for meaning of isHead.
 parseExpr' :: Bool -> String -> Either ParseError Expr 
 parseExpr' isHead s = case parensSplit s of 
   -- no parens
@@ -117,39 +117,39 @@ parseExpr' isHead s = case parensSplit s of
   Left e -> Left e
 
 parseExpr :: String -> Either ParseError Expr 
-parseExpr = parseExpr' True 
+parseExpr = (parseExpr' True) . cutSpaces 
+  where cutSpaces = filter $ (/=) ' '
 
 -- evaluations
 -------------------------------------------------------------------------------
 
 -- greedily (left-to-right) searches for the specified operator, and
 -- replaces each instace of [left, op, right] with an application of 
--- op on the terms, e.g. replaces [5, -, 2] --> [3]
--- ex: evalOp [2,-,4,+,7,-,9] Minus = evalOp [-2,+,7,-,9] Minus = [-2,+,-2]
-evalOp :: Operation -> [Term] -> Either ParseError [Term] 
-evalOp op ts = case ts of 
-  [] -> Right [] 
+-- op on the terms, e.g. replaces [5, -, 2] with [3]
+-- ex: collapseOp [2,-,4,+,7,-,9] Minus = collapseOp [-2,+,7,-,9] Minus = [-2,+,-2]
+collapseOp :: Operation -> [Term] -> Either ParseError [Term] 
+collapseOp op ts = case ts of 
+  [] -> Left EmptyInput
   [Number n] -> Right [Number n] 
-  (Number n1):op':(Number n2):rest -> case (op' == Op op) of 
+  (Number n1):op':(Number n2):rest -> case op' == Op op of 
     -- ex: pretend the op = Plus
-    -- ex of True case: input is [12,+,5,-,7,+,8], output is evalOp Plus [17,-,7,+,8]
-    True -> evalOp op $ (Number $ (lookUp op) n1 n2):rest 
-    -- ex of False case: input is [12,/,5,-,7,+,8], output is [12,/] ++ evalOp Plus [5,-,7,+,8]
-    False -> ([Number n1, op'] ++) <$!> evalOp op ((Number n2):rest)
+    -- ex of True case: input is [12,+,5,-,7,+,8], output is collapseOp Plus [17,-,7,+,8]
+    True -> collapseOp op $ (Number $ (evalOp op) n1 n2):rest 
+    -- ex of False case: input is [12,/,5,-,7,+,8], output is [12,/] ++ collapseOp Plus [5,-,7,+,8]
+    False -> ([Number n1, op'] ++) <$!> collapseOp op ((Number n2):rest)
   _ -> Left $ OperatorError
 
--- runs evalOp on all operations; the list is ordered in reverse order of operations
+-- runs collapseOp on all operations; the list is ordered in reverse order of operations
 collapseOps :: [Term] -> Either ParseError [Term]  
-collapseOps = foldr (<=<) return $ fmap evalOp [Plus, Minus, Times, Divide, Exp]
+collapseOps = foldr (<=<) return $ fmap collapseOp [Plus, Minus, Times, Divide, Exp]
 -- ^ fancy Haskell way of compressing the below line of code
--- (evalOp Plus) <=< (evalOp Minus) <=< (evalOp Times) <=< (evalOp Divide) <=< (evalOp Exp)
+-- (collapseOp Plus) <=< (collapseOp Minus) <=< (collapseOp Times) <=< (collapseOp Divide) <=< (collapseOp Exp)
 -- ^ fancy Haskell way of saying "evalPlus . evalMinus . evalTimes . evalDivide . evalExp", but
--- which automatically handles the error checking in a typesafe way
+-- which automatically handles the error passing in a typesafe way
 
 nakedEval :: [Term] -> Either ParseError Double 
 nakedEval s = case collapseOps s of 
   Right [Number x] ->  Right x
-  Right [] -> Left EmptyInput
   Right _ -> Left $ AssertFalse "forbidden case of nakedEval"
   Left e -> Left e 
 
@@ -164,5 +164,4 @@ parensEval s = case s of
     (Left e, _) -> Left e 
 
 calculate :: String -> Either ParseError Double 
-calculate = (parensEval <=< parseExpr) . cutWhitespace
-  where cutWhitespace = filter (\c -> c /= ' ')
+calculate = parensEval <=< parseExpr
